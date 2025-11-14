@@ -1,202 +1,249 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BlinkChat - Friendly Anonymous Chat</title>
-  <meta name="description" content="BlinkChat — anonymous, friendly, moderated chats. No explicit content, no personal info sharing. Connect instantly with new people.">
+  <title>BlinkChat — Anonymous Chat</title>
+
+  <!-- Tailwind CDN for quick responsive styling -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- ====== Safety & interaction fixes + UI styles ====== -->
   <style>
-    body { background: linear-gradient(135deg,#0f1724 0%,#0b1220 100%); color:#e6eef8; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; min-height:100vh; margin:0; display:flex; flex-direction:column; }
-    .neon-text { text-shadow:0 0 5px #6ee7b7,0 0 10px #6ee7b7; }
-    .neon-border { box-shadow:0 0 10px rgba(110,231,183,0.18),0 0 20px rgba(110,231,183,0.08); }
-    .chat-bubble { max-width:70%; padding:10px 15px; border-radius:15px; margin-bottom:10px; line-height:1.4; animation:fadeIn .25s ease; word-break:break-word; }
-    .chat-bubble.self { background:#6ee7b7; color:#071029; align-self:flex-end; }
-    .chat-bubble.other { background:#1f2937; color:#e6eef8; align-self:flex-start; }
-    @keyframes fadeIn { from {opacity:0; transform:translateY(8px)} to {opacity:1; transform:none} }
-    .chat-container { height: calc(100vh - 120px); display:flex; flex-direction:column; }
-    .typing-indicator { display:flex; align-items:center; font-size:.8rem; color:#a0aab4; margin-top:-10px; }
-    .typing-indicator span { animation: blink 1s infinite; display:inline-block; }
-    .typing-indicator span:nth-child(2){ animation-delay:.2s } .typing-indicator span:nth-child(3){ animation-delay:.4s }
-    @keyframes blink { 0%,100%{opacity:.2} 50%{opacity:1} }
-    input, select, button { transition:all .18s ease; }
-    button:hover { transform:translateY(-2px); }
+    /* ===== Interaction / overlay fixes (important) ===== */
+    /* Prevent accidental overlay from blocking taps and ensure controls get taps */
+    html, body { -webkit-tap-highlight-color: transparent; }
+    input, select, button, .btn, .chat-input {
+      position: relative !important;
+      z-index: 9999 !important;
+      pointer-events: auto !important;
+    }
+    /* If any large overlay exists accidentally, make it non-interactive (temporary safety) */
+    .overlay, .modal, .age-overlay, .invisible-block {
+      pointer-events: none !important;
+    }
+    /* But keep actual modal children interactive */
+    .modal * , .age-overlay * { pointer-events: auto !important; z-index:10000 !important; }
+
+    /* ===== Visual styles ===== */
+    .neon {
+      text-shadow: 0 0 6px rgba(16,185,129,0.95), 0 0 12px rgba(16,185,129,0.6);
+    }
+    .bubble {
+      max-width: 86%;
+      word-wrap: break-word;
+      line-height: 1.3;
+      border-radius: 0.6rem;
+    }
+    .scroll { scrollbar-width: thin; }
+    @media (max-width:420px){
+      .chat-input { font-size: 15px; }
+      .form-input { font-size: 15px; padding:.6rem .75rem; }
+      .btn { font-size: 15px; padding:.55rem .9rem; }
+    }
+
+    /* small nicety to avoid input outlines on mobile focusing uglily */
+    input:focus, select:focus, button:focus { outline: none; box-shadow: 0 0 0 3px rgba(16,185,129,0.12); }
   </style>
 </head>
-<body>
-  <div id="setupModal" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
-    <div class="bg-[#071029] p-8 rounded-lg max-w-md w-11/12 neon-border">
-      <h2 id="siteTitle" class="text-2xl font-bold text-center mb-4 neon-text">BlinkChat</h2>
-      <p class="text-center text-gray-300 mb-4">Friendly, anonymous chats. No explicit content. Do not share personal information.</p>
+<body class="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-slate-100 antialiased">
 
-      <div class="mb-4">
-        <label class="block text-gray-300 mb-2">Username</label>
-        <input id="username" type="text" class="w-full py-2 px-4 bg-[#0f1724] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6ee7b7]" placeholder="Choose username (3-20 chars)">
-        <p id="usernameStatus" class="text-sm mt-1 hidden"></p>
-      </div>
-
-      <div class="mb-4">
-        <label class="block text-gray-300 mb-2">Gender (optional)</label>
-        <select id="gender" class="w-full py-2 px-4 bg-[#0f1724] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6ee7b7]">
-          <option value="">Prefer not to say</option>
-          <option value="male">Male</option>
-          <option value="female">Female</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
-
-      <div class="mb-2 text-xs text-gray-400">
-        By joining you accept our <a href="/terms.html" class="text-[#6ee7b7] underline">Terms</a> and <a href="/privacy.html" class="text-[#6ee7b7] underline">Privacy Policy</a>. No explicit content allowed. Sharing phone/email is blocked.
-      </div>
-
-      <button id="startChat" class="w-full mt-4 py-3 bg-[#6ee7b7] text-[#071029] font-bold rounded-lg hover:opacity-95">Start Chatting</button>
-    </div>
-  </div>
-
-  <div id="chatScreen" class="hidden flex flex-col h-screen">
-    <header class="p-4 border-b border-gray-700 flex justify-between items-center">
-      <h1 class="text-2xl font-bold neon-text" id="headerTitle">BlinkChat</h1>
-      <div class="flex space-x-2">
-        <button id="nextPerson" class="px-4 py-2 bg-[#6ee7b7] text-[#071029] font-semibold rounded-lg">Next Person</button>
-        <button id="reportUser" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-lg">Report</button>
-      </div>
+  <div class="max-w-xl mx-auto p-4">
+    <!-- header -->
+    <header class="mb-4 text-center">
+      <h1 class="text-3xl sm:text-4xl font-extrabold neon">BlinkChat</h1>
+      <p class="text-sm text-slate-300 mt-1">Friendly anonymous chats — no personal info. </p>
     </header>
 
-    <div class="flex-1 p-4 overflow-hidden flex flex-col chat-container">
-      <div id="status" class="text-center text-gray-400 mb-4">Connecting to a random person...</div>
-      <div id="chatMessages" class="flex-1 overflow-y-auto pr-1 flex flex-col"></div>
-      <div id="typingIndicator" class="typing-indicator hidden"><span>.</span><span>.</span><span>.</span> Typing</div>
-
-      <div class="mt-2 flex">
-        <input id="messageInput" type="text" class="flex-1 py-3 px-4 bg-[#0f1724] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6ee7b7]" placeholder="Type a friendly message...">
-        <button id="sendMessage" class="px-6 py-3 bg-[#6ee7b7] text-[#071029] font-bold rounded-lg ml-2">Send</button>
-      </div>
+    <!-- Age modal simplified inline for fast use (still requires confirm) -->
+    <div id="ageSection" class="bg-slate-900/60 border border-slate-700 rounded-lg p-4 mb-4 modal">
+      <p class="text-sm text-slate-300 mb-3">You must be 18+ to use BlinkChat. By continuing you accept our Terms & Privacy Policy.</p>
+      <label class="flex items-center gap-3">
+        <input id="ageConfirm" type="checkbox" class="form-checkbox h-5 w-5 accent-emerald-400">
+        <span class="text-sm">I confirm I am 18 or older</span>
+      </label>
+      <button id="ageEnter" class="mt-3 w-full btn bg-emerald-400 text-slate-900 font-semibold rounded-md py-2 disabled:opacity-60" disabled>Continue</button>
     </div>
 
-    <footer class="p-4 text-center text-gray-500 text-sm">
-      <p id="footerText">BlinkChat &copy; <span id="year"></span> | <a href="/privacy.html" class="text-[#6ee7b7] underline">Privacy</a></p>
+    <!-- Setup / profile card -->
+    <div id="setup" class="hidden bg-slate-900/50 border border-slate-700 rounded-lg p-4 mb-4 space-y-3">
+      <label class="block text-sm">Choose a username</label>
+      <input id="username" class="form-input w-full rounded-md bg-slate-800 border border-slate-700 p-3" placeholder="e.g. Raju123" minlength="3" />
+
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <label class="block text-sm">Gender (optional)</label>
+          <select id="gender" class="form-input w-full rounded-md bg-slate-800 border border-slate-700 p-3">
+            <option value="unspecified">Unspecified</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="w-28">
+          <label class="block text-sm">Age</label>
+          <input id="age" type="number" min="18" max="100" value="18" class="form-input w-full rounded-md bg-slate-800 border border-slate-700 p-3 text-center" />
+        </div>
+      </div>
+
+      <button id="startChat" class="w-full btn bg-emerald-400 text-slate-900 font-semibold rounded-md py-2">Start Chatting</button>
+    </div>
+
+    <!-- Chat screen -->
+    <main id="chatScreen" class="hidden flex flex-col h-[65vh]">
+      <div class="mb-2 flex items-center justify-between">
+        <h2 class="font-semibold">Connected to: <span id="partnerName" class="text-emerald-300">—</span></h2>
+        <div class="flex gap-2">
+          <button id="nextPerson" class="btn bg-emerald-500 text-slate-900 rounded-md px-3 py-1">Next</button>
+          <button id="reportUser" class="btn bg-rose-600 text-white rounded-md px-3 py-1">Report</button>
+        </div>
+      </div>
+
+      <section class="flex-1 bg-slate-900/40 border border-slate-800 rounded-lg p-3 overflow-y-auto scroll">
+        <div id="chatMessages" class="flex flex-col gap-3"></div>
+      </section>
+
+      <div class="mt-3 flex gap-2">
+        <input id="messageInput" class="chat-input flex-1 rounded-md bg-slate-800 border border-slate-700 p-3" placeholder="Write a message..." />
+        <button id="sendMessage" class="btn bg-emerald-400 text-slate-900 rounded-md px-4">Send</button>
+      </div>
+    </main>
+
+    <footer class="mt-4 text-center text-xs text-slate-400">
+      BlinkChat • Anonymous • Do not share personal details
     </footer>
   </div>
 
-  <div id="safetyModal" class="fixed inset-0 bg-black bg-opacity-80 items-center justify-center z-50 hidden">
-    <div class="bg-[#071029] p-8 rounded-lg max-w-md w-11/12 neon-border overflow-y-auto max-h-[80vh]">
-      <h2 class="text-2xl font-bold text-center mb-4 neon-text">Safety Guidelines</h2>
-      <ul class="list-disc pl-5 space-y-2 text-gray-300">
-        <li>Do not share phone numbers, emails, addresses, or social profiles.</li>
-        <li>Be respectful — abusive or explicit content is prohibited.</li>
-        <li>Report misuse so moderators can review.</li>
-        <li>Sessions are ephemeral and logs are minimized.</li>
-        <li>If uncomfortable, click "Next Person".</li>
-      </ul>
-      <button id="closeSafety" class="w-full mt-6 py-3 bg-[#6ee7b7] text-[#071029] font-bold rounded-lg">Got It</button>
-    </div>
-  </div>
+  <!-- socket.io client (keeps same) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 
-<script>
-  const SITE_NAME = 'BlinkChat';
-  const setupModal = document.getElementById('setupModal');
-  const chatScreen = document.getElementById('chatScreen');
-  const usernameInput = document.getElementById('username');
-  const usernameStatus = document.getElementById('usernameStatus');
-  const startChatBtn = document.getElementById('startChat');
-  const messageInput = document.getElementById('messageInput');
-  const sendMessageBtn = document.getElementById('sendMessage');
-  const chatMessages = document.getElementById('chatMessages');
-  const status = document.getElementById('status');
-  const nextPersonBtn = document.getElementById('nextPerson');
-  const reportUserBtn = document.getElementById('reportUser');
-  const safetyLink = document.getElementById('safetyLink');
-  const safetyModal = document.getElementById('safetyModal');
-  const closeSafetyBtn = document.getElementById('closeSafety');
-  const typingIndicator = document.getElementById('typingIndicator');
-  document.getElementById('year').textContent = new Date().getFullYear();
-  document.getElementById('siteTitle').textContent = SITE_NAME;
-  document.getElementById('headerTitle').textContent = SITE_NAME;
-  document.getElementById('footerText').childNodes[0].textContent = SITE_NAME + ' \u00A0 ';
+  <!-- ====== Client UI + socket logic (mobile-friendly) ====== -->
+  <script>
+    // Elements
+    const ageConfirm = document.getElementById('ageConfirm');
+    const ageEnter = document.getElementById('ageEnter');
+    const ageSection = document.getElementById('ageSection');
+    const setup = document.getElementById('setup');
+    const chatScreen = document.getElementById('chatScreen');
 
-  let socket;
-  let currentUsername = '';
-  let isConnected = false;
-  let typingTimeout;
+    const usernameInput = document.getElementById('username');
+    const startBtn = document.getElementById('startChat');
+    const partnerName = document.getElementById('partnerName');
+    const chatMessages = document.getElementById('chatMessages');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendMessage');
+    const nextBtn = document.getElementById('nextPerson');
+    const reportBtn = document.getElementById('reportUser');
 
-  usernameInput.addEventListener('input', () => {
-    const username = usernameInput.value.trim();
-    if (username.length < 3 || username.length > 20) {
-      usernameStatus.classList.add('hidden');
-      return;
-    }
-    setTimeout(() => {
-      const forbidden = ['admin','moderator','system'];
-      if (forbidden.includes(username.toLowerCase())) {
-        usernameStatus.textContent = 'Username not allowed';
-        usernameStatus.className = 'text-sm mt-1 text-red-400';
-      } else {
-        usernameStatus.textContent = 'Looks good';
-        usernameStatus.className = 'text-sm mt-1 text-green-400';
+    let socket, connected = false;
+
+    // Age confirmation
+    ageConfirm.addEventListener('change', ()=> ageEnter.disabled = !ageConfirm.checked);
+    ageEnter.addEventListener('click', ()=> {
+      if (ageConfirm.checked) {
+        ageSection.classList.add('hidden');
+        setup.classList.remove('hidden');
+        // ensure focus doesn't jump to unexpected input
+        setTimeout(()=> usernameInput.focus(), 200);
       }
-    }, 200);
-  });
-
-  const bannedWords = ['explicitword1','explicitword2','porn','sex','nude','xxx'];
-  function containsBannedWord(text) {
-    const t = (text||'').toLowerCase();
-    for (const w of bannedWords) if (w && t.includes(w)) return true;
-    return false;
-  }
-  function containsPII(text) {
-    const phone = /(\+?\d{10,15})|(\d{3}[-.\s]\d{3}[-.\s]\d{4})/;
-    const email = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
-    return phone.test(text) || email.test(text);
-  }
-
-  startChatBtn.addEventListener('click', () => {
-    const username = usernameInput.value.trim();
-    if (username.length < 3) { alert('Choose a username with 3 or more characters.'); return; }
-    if (!/^[A-Za-z0-9_.-]{3,20}$/.test(username)) { alert('Username can contain letters, numbers, ., _, - only.'); return; }
-    currentUsername = username;
-    setupModal.classList.add('hidden');
-    chatScreen.classList.remove('hidden');
-    initSocket();
-  });
-
-  function initSocket() {
-    socket = io();
-
-    socket.on('connect', () => {
-      status.textContent = 'Connected. Finding a chat partner...';
-      isConnected = true;
-      socket.emit('join', { username: currentUsername, gender: document.getElementById('gender').value });
     });
-    socket.on('disconnect', () => { status.textContent = 'Disconnected. Reconnecting...'; isConnected = false; });
-    socket.on('partnerFound', (partner) => { const label = partner && partner.gender ? ` (${partner.gender})` : ''; status.textContent = `Chatting with someone${label}`; });
-    socket.on('message', (data) => { addMessageToChat(data.message, false); typingIndicator.classList.add('hidden'); });
-    socket.on('system', (msg) => { addMessageToChat(msg, false, true); });
-    socket.on('typing', () => { typingIndicator.classList.remove('hidden'); clearTimeout(typingTimeout); typingTimeout = setTimeout(()=>typingIndicator.classList.add('hidden'),2000); });
-    socket.on('partnerDisconnected', () => { status.textContent = 'Partner disconnected. Finding new partner...'; addMessageToChat('Partner has left the chat.', false, true); });
-  }
 
-  function addMessageToChat(message, isSelf, isSystem=false) {
-    const d = document.createElement('div'); d.className = isSelf ? 'chat-bubble self' : 'chat-bubble other';
-    d.textContent = isSystem ? message : (isSelf ? 'You: ' : 'Stranger: ') + message;
-    chatMessages.appendChild(d); chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
+    // Start chat / validation
+    startBtn.addEventListener('click', ()=> {
+      const name = usernameInput.value.trim();
+      if (!name || name.length < 3) { alert('Choose a username with 3+ characters'); return; }
+      setup.classList.add('hidden');
+      chatScreen.classList.remove('hidden');
+      connectToServer(name);
+    });
 
-  sendMessageBtn.addEventListener('click', sendMessage);
-  messageInput.addEventListener('keypress', (e)=>{ if(e.key==='Enter') sendMessage(); });
-  messageInput.addEventListener('input', ()=>{ if(socket && isConnected) socket.emit('typing'); });
+    function connectToServer(name) {
+      // Use same origin (Render serves frontend+backend)
+      const root = location.origin;
+      socket = io(root);
 
-  function sendMessage(){
-    const message = messageInput.value.trim(); if(!message) return;
-    if (containsBannedWord(message)) { alert('Please keep conversation respectful.'); return; }
-    if (containsPII(message)) { alert('Sharing phone/email is not allowed. Remove personal info before sending.'); return; }
-    if(socket && isConnected){ socket.emit('message', { message }); addMessageToChat(message, true); messageInput.value=''; } else alert('Not connected to server yet.');
-  }
+      socket.on('connect', ()=> {
+        connected = true;
+        socket.emit('join', { username: name });
+        addSystem('Connected. Finding a partner...');
+      });
 
-  nextPersonBtn.addEventListener('click', ()=>{ if(socket){ socket.emit('nextPerson'); status.textContent='Finding a new chat partner...'; chatMessages.innerHTML=''; } });
-  reportUserBtn.addEventListener('click', ()=>{ if(socket && isConnected){ socket.emit('report', { reason:'user_reported' }); alert('Reported. Moderation will review. Moving to next person.'); socket.emit('nextPerson'); status.textContent='Finding a new chat partner...'; chatMessages.innerHTML=''; } });
+      socket.on('partnerFound', partner => {
+        partnerName.textContent = partner.username || 'Stranger';
+        addSystem('Partner found — say hi!');
+      });
 
-  document.addEventListener('DOMContentLoaded', ()=> usernameInput.focus());
-</script>
+      socket.on('message', data => addMessage(data.message, false));
+      socket.on('partnerDisconnected', ()=> addSystem('Partner left — finding another...'));
+      socket.on('typing', ()=> addTempSystem('Typing…', 900));
+
+      socket.on('disconnect', ()=> { connected=false; addSystem('Disconnected from server'); });
+      socket.on('connect_error', (err) => addSystem('Connection error — retrying...'));
+    }
+
+    function addMessage(text, self) {
+      const el = document.createElement('div');
+      el.className = 'bubble p-3 rounded-lg ' + (self ? 'bg-emerald-300 text-slate-900 self-end' : 'bg-slate-700 text-slate-100 self-start');
+      el.textContent = (self ? 'You: ' : '') + text;
+      chatMessages.appendChild(el);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function addSystem(text) {
+      const el = document.createElement('div');
+      el.className = 'text-xs text-slate-400 italic';
+      el.textContent = text;
+      chatMessages.appendChild(el);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function addTempSystem(text, ms=1000) {
+      const el = document.createElement('div');
+      el.className = 'text-xs text-slate-400 italic';
+      el.textContent = text;
+      chatMessages.appendChild(el);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      setTimeout(()=> el.remove(), ms);
+    }
+
+    // Sending
+    sendBtn.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keydown', (e)=> { if (e.key === 'Enter') sendMessage(); });
+
+    function sendMessage(){
+      const msg = messageInput.value.trim();
+      if (!msg || !socket || !connected) return;
+      socket.emit('message', { message: msg });
+      addMessage(msg, true);
+      messageInput.value = '';
+    }
+
+    // Next / report
+    nextBtn.addEventListener('click', ()=> {
+      if (socket && connected) {
+        socket.emit('nextPerson');
+        chatMessages.innerHTML = '';
+        partnerName.textContent = '—';
+        addSystem('Finding new partner...');
+      }
+    });
+
+    reportBtn.addEventListener('click', ()=> {
+      if (socket && connected) {
+        socket.emit('report');
+        addSystem('Reported user. Finding new partner...');
+        socket.emit('nextPerson');
+        chatMessages.innerHTML = '';
+      }
+    });
+
+    // Safety: focus trap prevention (if some overlay steals focus)
+    document.addEventListener('click', (e)=>{
+      // if click lands on body and not an interactive control, don't focus hidden inputs
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+      if (!['input','button','select','textarea','a'].includes(tag)) return;
+      // otherwise let normal interaction
+    }, true);
+  </script>
 </body>
   </html>
